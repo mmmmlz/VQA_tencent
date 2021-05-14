@@ -139,7 +139,18 @@ if __name__ == "__main__":
 
     torch.utils.backcompat.broadcast_warning.enabled = True
 
-
+#     if args.database == 'KoNViD-1k':
+#         videos_dir = '/home/ldq/Downloads/KoNViD-1k/'  # videos dir
+#         features_dir = 'CNN_features_KoNViD-1k/'  # features dir
+#         datainfo = 'data/KoNViD-1kinfo.mat'  # database info: video_names, scores; video format, width, height, index, ref_ids, max_len, etc.
+#     if args.database == 'CVD2014':
+#         videos_dir = '/media/ldq/Research/Data/CVD2014/'
+#         features_dir = 'CNN_features_CVD2014/'
+#         datainfo = 'data/CVD2014info.mat'
+#     if args.database == 'LIVE-Qualcomm':
+#         videos_dir = '/media/ldq/Others/Data/12.LIVE-Qualcomm Mobile In-Capture Video Quality Database/'
+#         features_dir = 'CNN_features_LIVE-Qualcomm/'
+#         datainfo = 'data/LIVE-Qualcomminfo.mat'
 
 
     videos_dir = "/cfs/cfs-3cab91f9f/liuzhang/video_data/video_clarity_vid2"
@@ -183,7 +194,7 @@ if __name__ == "__main__":
         if name1+".mp4" in video_list:
             video_names.append(name)
     print(len(video_names))
-    print(video_names)
+    print(video_names[-1])
     
    # sys.exit()
  
@@ -193,7 +204,7 @@ if __name__ == "__main__":
 #     video_format = Info['video_format'][()].tobytes()[::2].decode()
 #     width = int(Info['width'][0])
 #     height = int(Info['height'][0])
-    dataset = VideoDataset(videos_dir, video_names, [], video_format, width, height)
+    dataset = VideoDataset(videos_dir, video_names[::-1], [], video_format, width, height)
     max_len = 0
     print(len(dataset))
     #sys.exit()
