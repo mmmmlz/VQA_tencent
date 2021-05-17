@@ -25,7 +25,7 @@ import sys
 from tqdm import tqdm
 
 class VQADataset(Dataset):
-    def __init__(self, features_dir='CNN_features_KoNViD-1k/', index=None, max_len=240, feat_dim=4096, scale=1):
+    def __init__(self, features_dir='CNN_features_KoNViD-1k/', index=None, max_len=8000, feat_dim=4096, scale=1):
         super(VQADataset, self).__init__()
         self.folders = index
         self.features_dir = features_dir
@@ -63,17 +63,18 @@ class VQADataset(Dataset):
         length = features.shape[0]
         label = int(path.split("--")[1][0])
         data[:length,:] = features
-        return data,length,label
+        name = path.split("_")[0]
+        return data,length,label,name
         
         
     def __getitem__(self, idx):
         
-        img_data,length,label= self.get_img(self.folders[idx])
+        img_data,length,label,name= self.get_img(self.folders[idx])
         
         
         
         
-        sample = img_data,length,label
+        sample = img_data,length,label,name
         return sample
 
 
@@ -142,7 +143,7 @@ if __name__ == "__main__":
                         help='learning rate (default: 0.00001)')
     parser.add_argument('--batch_size', type=int, default=16,
                         help='input batch size for training (default: 16)')
-    parser.add_argument('--epochs', type=int, default=100,
+    parser.add_argument('--epochs', type=int, default=2000,
                         help='number of epochs to train (default: 2000)')
 
     parser.add_argument('--database', default='my_dataset', type=str,
@@ -183,7 +184,7 @@ if __name__ == "__main__":
     num_for_val = 10
     os.environ['CUDA_VISIBLE_DEVICE']='0,1,2,3,4'
    # videos_dir = "/cfs/cfs-3cab91f9f/liuzhang/video_data/video_clarity_vid"
-    features_dir = "/cfs/cfs-3cab91f9f/liuzhang/video_data/CNN_features_mydata/" 
+    features_dir = "/cfs/cfs-3cab91f9f/liuzhang/video_data/CNN_features_mydata2/" 
   #  datainfo = "./data/Result1.csv"
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -213,20 +214,18 @@ if __name__ == "__main__":
     width = height=0
     max_len = 8000
     train_list,val_list,test_list =[],[],[]
-    
+    best_acc =0
     
     print("训练数据目录：",features_dir)
     
     
     #sys.exit()
-    val_ratio = 40
+    val_ratio = 20
     test_ratio = 20
     
     for i in range(total_videos):
         if i % val_ratio ==0:
             val_list.append(result[i])
-        elif i % test_ratio == 0:
-            test_list.append(result[i])
         else:
             train_list.append(result[i])
     
@@ -240,10 +239,10 @@ if __name__ == "__main__":
  #   print(len(train_index))
     
     train_dataset = VQADataset(features_dir, train_list, max_len)
-    train_loader = torch.utils.data.DataLoader(dataset=train_dataset, batch_size=args.batch_size, shuffle=True,num_workers=8)
+    train_loader = torch.utils.data.DataLoader(dataset=train_dataset, batch_size=args.batch_size, shuffle=True,num_workers=0)
     
     print("load train data success!")
-    for i, (features, length, label) in enumerate(train_loader):
+    for i, (features, length, label,name) in enumerate(train_loader):
         print(features.shape,length.shape)
         break
         
@@ -252,14 +251,9 @@ if __name__ == "__main__":
     
     val_dataset = VQADataset(features_dir, val_list, max_len)
     val_loader = torch.utils.data.DataLoader(dataset=val_dataset)
-#     for i, (features, length, label) in enumerate(val_loader):
-#         print(features.shape)
-#         break
+
     print("load val data success!")
     
-
-#     test_dataset = VQADataset(features_dir, test_index, max_len, scale=scale)
-#     test_loader = torch.utils.data.DataLoader(dataset=test_dataset)
     
     model = VSFA().to(device)  #
 
@@ -267,22 +261,38 @@ if __name__ == "__main__":
         os.makedirs('models')
     trained_model_file = 'models'
     
+    
     if torch.cuda.device_count() > 1:
         print("Using", torch.cuda.device_count(), "GPUs!")
         model = nn.DataParallel(model)
-        
-        
-    criterion = nn.L1Loss()  # L1 loss
     optimizer = Adam(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
-    scheduler = lr_scheduler.StepLR(optimizer, step_size=args.decay_interval, gamma=args.decay_ratio)
-    best_val_criterion = -1  # SROCC min
     
-    for epoch in range(args.epochs):
+    
+    pretrained =1
+    new_state_dict = {}
+    if pretrained:
+        path = "./models/model_321.pth"
+        checkpoint = torch.load(path)
+        for k, v in checkpoint["model"].items():
+            name =k # remove `module.`，表面从第7个key值字符取到最后一个字符，正好去掉了module.
+            new_state_dict[name] = v #新字典的key值对应的value为一一对应的值。
+        model.load_state_dict(new_state_dict)
+        optimizer.load_state_dict(checkpoint['optimizer'])
+        epoch_start = checkpoint['epoch']
+        print("load_success!!!!!!!!!!!!")       
+    
+    
+    
+    criterion = nn.L1Loss()  # L1 loss
+   
+    scheduler = lr_scheduler.StepLR(optimizer, step_size=args.decay_interval, gamma=args.decay_ratio)
+    
+    for epoch in range(epoch_start,args.epochs):
         # Train
         model.train()
         L = 0
         print("training epch:{},total epch:{}".format(epoch,args.epochs))
-        for i, (features, length, label) in enumerate(tqdm(train_loader)):
+        for i, (features, length, label,name) in enumerate(tqdm(train_loader)):
             
             
             features = features.to(device).float()
@@ -304,56 +314,94 @@ if __name__ == "__main__":
             y_val = np.zeros(len(val_list))
             L = 0
             with torch.no_grad():
-                print("start Val!")
-                for i, (features, length, label) in enumerate(tqdm(val_loader)):
-                    y_val[i] = 1 * label.item()  #
+                badcase = {}
+          
+
+               # y_pred = np.zeros(len(result))
+             #   y_test = np.zeros(len(result))
+                L = 0
+                for i, (features, length, label,name) in enumerate(tqdm(val_loader)):
+                    y_val[i] = 1 * label.item() 
                     features = features.to(device).float()
                     label = label.to(device).float()
-
-                    #print("val data:",features.shape,length.shape,label.shape)
-
-                    #print(length.float())
                     outputs = model(features, length.float())
-                    #print("outputs",outputs.shape)
-                    y_pred[i] = 1 * outputs.item()
-
+                    if outputs >1.5:
+                        y_pred[i] =2
+                    elif outputs <0.1:
+                        y_pred[i] = 0
+                    else:
+                        y_pred[i] =1
+                    if y_pred[i] != label:
+                        badcase[name[0]] = [float(outputs),int(label)]
+                    #y_pred[i] = 1 * outputs.item()
                     loss = criterion(outputs, label)
                     L = L + loss.item()
-            print("ypred",y_pred)
-            print("y_label",y_val)
-            val_loss = L / (i + 1)
-            val_RMSE = np.sqrt(((y_pred-y_val) ** 2).mean())
-            print("******************************************************************")
-            print("Val results: val loss={:.4f} RMSE={:.4f}".format(val_loss, val_RMSE))
-
-            print("save model at epch")
-
-            state = {'model': model.state_dict(), 'optimizer': optimizer.state_dict(), 'epoch': epoch}
-            torch.save(state,os.path.join(trained_model_file,"model_{}.pth".format(epoch+1)))
-            print("Epoch {} model saved!".format(epoch + 1))
-
+            #print("ypred",y_pred)
+           # print("y_label",y_val)
+            re = y_pred == y_val
             
-#     # Test
-#     if args.test_ratio > 0:
-#         model.load_state_dict(torch.load(trained_model_file))
+            
+            acc = sum(re)/len(val_list)
+            print("Acc:",acc)
+            print("Badcase",badcase)
+            if acc >best_acc:
+                val_loss = L / (i + 1)
+                val_RMSE = np.sqrt(((y_pred-y_val) ** 2).mean())
+                print("******************************************************************")
+                print("Val results: val loss={:.4f} RMSE={:.4f}".format(val_loss, val_RMSE))
+
+                print("save model at epch")
+
+                state = {'model': model.state_dict(), 'optimizer': optimizer.state_dict(), 'epoch': epoch}
+                torch.save(state,os.path.join(trained_model_file,"best.pth"))
+                print("Epoch {} model saved!".format(epoch + 1))
+
+#     if test_flag:
+        
+        
+#         check_point = torch.load(os.path.join(trained_model_file,"model_{}.pth".format(epoch+1)))
+#         new_state_dict={}
+#         for k, v in check_point["model"].items():
+#             name =k[7:] # remove `module.`，表面从第7个key值字符取到最后一个字符，正好去掉了module.
+#             new_state_dict[name] = v #新字典的key值对应的value为一一对应的值。
+        
+        
+#         model.load_state_dict(new_state_dict)
+#         print("load model {} success".format(pre_model))
+        
 #         model.eval()
 #         with torch.no_grad():
-#             y_pred = np.zeros(len(test_index))
-#             y_test = np.zeros(len(test_index))
+#             badcase = {}
+          
+          
+#             y_pred = np.zeros(len(result))
+#             y_test = np.zeros(len(result))
 #             L = 0
-#             for i, (features, length, label) in enumerate(test_loader):
-#                 y_test[i] = scale * label.item() 
+#             for i, (features, length, label,name) in enumerate(tqdm(test_loader)):
+#                 y_test[i] = 1 * label.item() 
 #                 features = features.to(device).float()
 #                 label = label.to(device).float()
 #                 outputs = model(features, length.float())
-#                 y_pred[i] = scale * outputs.item()
+#                 if outputs >1.5:
+#                     y_pred[i] =2
+#                 elif outputs <0.1:
+#                     y_pred[i] = 0
+#                 else:
+#                     y_pred[i] =1
+#                 if y_pred[i] != label:
+#                     badcase[name] = [float(outputs),int(label)]
+#                 #y_pred[i] = 1 * outputs.item()
 #                 loss = criterion(outputs, label)
 #                 L = L + loss.item()
+                
+                
+          
+          
 #         test_loss = L / (i + 1)
-#         PLCC = stats.pearsonr(y_pred, y_test)[0]
-#         SROCC = stats.spearmanr(y_pred, y_test)[0]
+            
 #         RMSE = np.sqrt(((y_pred-y_test) ** 2).mean())
-#         KROCC = stats.stats.kendalltau(y_pred, y_test)[0]
-#         print("Test results: test loss={:.4f}, SROCC={:.4f}, KROCC={:.4f}, PLCC={:.4f}, RMSE={:.4f}"
-#               .format(test_loss, SROCC, KROCC, PLCC, RMSE))
-#         np.save(save_result_file, (y_pred, y_test, test_loss, SROCC, KROCC, PLCC, RMSE, test_index))
+        
+#         re = y_pred == y_test
+#         print(sum(re)/test_num)
+#         print(badcase)
+          

@@ -22,31 +22,59 @@ from scipy import stats
 import datetime
 import pandas as pd
 import sys
+from tqdm import tqdm
 
 class VQADataset(Dataset):
-    def __init__(self, features_dir='CNN_features_KoNViD-1k/', index=None, max_len=240, feat_dim=4096, scale=1):
+    def __init__(self, features_dir='CNN_features_KoNViD-1k/', index=None, max_len=8000, feat_dim=4096, scale=1):
         super(VQADataset, self).__init__()
-        self.features = np.zeros((len(index), max_len, feat_dim))
-        self.length = np.zeros((len(index), 1))
-        self.mos = np.zeros((len(index), 1))
-        for i in range(len(index)):
-            features = np.load(features_dir + index[i] + '_resnet-50_res5c.npy')
-            if features.shape[0] > max_len:
-                features = features[0:max_len,:]
-            self.length[i] = features.shape[0]
+        self.folders = index
+        self.features_dir = features_dir
+        self.max_len = max_len
+        self.feat_dim = feat_dim
+        self.scale = scale
+#         self.features = np.zeros((len(index), max_len, feat_dim))
+#         self.length = np.zeros((len(index), 1))
+#         self.mos = np.zeros((len(index), 1))
+#         for i in range(len(index)):
+#             features = np.load(features_dir + index[i] + '_resnet-50_res5c.npy')
+#             if features.shape[0] > max_len:
+#                 features = features[0:max_len,:]
+#             self.length[i] = features.shape[0]
             
             
             
-            self.features[i, :features.shape[0], :] = features
-            self.mos[i] = np.load(features_dir + index[i] + '_score.npy')  #
-        self.scale = scale  #
-        self.label = self.mos / self.scale  # label normalization
-        print(self.features.shape,self.length.shape,self.label.shape)
+#             self.features[i, :features.shape[0], :] = features
+#             self.mos[i] = np.load(features_dir + index[i] + '_score.npy')  #
+            
+        
+#         self.scale = scale  #
+#         self.label = self.mos / self.scale  # label normalization
+      #  print(self.features.shape,self.length.shape,self.label.shape)
     def __len__(self):
-        return len(self.mos)
+        return len(self.folders)
 
+    
+    def get_img(self,path):
+        
+        data = np.zeros((max_len, self.feat_dim))
+        features = np.load(features_dir + path)
+        if features.shape[0] > max_len:
+            features = features[0:max_len,:]
+        length = features.shape[0]
+        label = int(path.split("--")[1][0])
+        data[:length,:] = features
+        name = path.split("_")[0]
+        return data,length,label,name
+        
+        
     def __getitem__(self, idx):
-        sample = self.features[idx], self.length[idx], self.label[idx]
+        
+        img_data,length,label,name= self.get_img(self.folders[idx])
+        
+        
+        
+        
+        sample = img_data,length,label,name
         return sample
 
 
@@ -90,6 +118,7 @@ class VSFA(nn.Module):
         #print(input.shape,input_length.shape)
         input = self.ann(input)  # dimension reduction
        # print(input.shape,input_length.shape)
+        self.rnn.flatten_parameters()
         outputs, _ = self.rnn(input, self._get_initial_state(input.size(0), input.device))
        # print(outputs.shape)
         q = self.q(outputs)  # frame quality
@@ -114,26 +143,15 @@ if __name__ == "__main__":
                         help='learning rate (default: 0.00001)')
     parser.add_argument('--batch_size', type=int, default=16,
                         help='input batch size for training (default: 16)')
-    parser.add_argument('--epochs', type=int, default=100,
+    parser.add_argument('--epochs', type=int, default=2000,
                         help='number of epochs to train (default: 2000)')
 
     parser.add_argument('--database', default='my_dataset', type=str,
                         help='database name (default: CVD2014)')
     parser.add_argument('--model', default='VSFA', type=str,
                         help='model name (default: VSFA)')
-    parser.add_argument('--exp_id', default=0, type=int,
-                        help='exp id for train-val-test splits (default: 0)')
 
 
-    parser.add_argument('--weight_decay', type=float, default=0.0,
-                        help='weight decay (default: 0.0)')
-
-    parser.add_argument("--notest_during_training", action='store_true',
-                        help='flag whether to test during training')
-    parser.add_argument("--disable_visualization", action='store_true',
-                        help='flag whether to enable TensorBoard visualization')
-    parser.add_argument("--log_dir", type=str, default="logs",
-                        help="log directory for Tensorboard log output")
 
     args = parser.parse_args()
 
@@ -145,183 +163,100 @@ if __name__ == "__main__":
     torch.backends.cudnn.benchmark = False
     np.random.seed(args.seed)
     random.seed(args.seed)
-    torch.cuda.set_device(1)
+
     torch.utils.backcompat.broadcast_warning.enabled = True
 
-    print('EXP ID: {}'.format(args.exp_id))
-    print(args.database)
-    print(args.model)
+
     
-    
-    
-    videos_dir = "/cfs/cfs-3cab91f9f/liuzhang/video_data/video_clarity_vid"
-    features_dir = "/cfs/cfs-3cab91f9f/liuzhang/video_data/CNN_features_mydata/" 
-    datainfo = "./data/Result1.csv"
+    num_for_val = 10
+    os.environ['CUDA_VISIBLE_DEVICE']='0,1,2,3,4'
+   # videos_dir = "/cfs/cfs-3cab91f9f/liuzhang/video_data/video_clarity_vid"
+    features_dir = "/cfs/cfs-3cab91f9f/liuzhang/video_data/CNN_features_mydata3/" 
+  #  datainfo = "./data/Result1.csv"
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
     
-
-    # 所有的视频
-    
-    Info = pd.read_csv(datainfo)
-    video_format = "RGB"
-    
-    video_names = list(Info["vid"])
     
     # 训练数据集合
     videos_pic1 = []
     result = os.listdir(features_dir)        
-    for video in video_names:
-        if video+".mp4"+'_resnet-50_res5c.npy' not in result:
-            continue
-        videos_pic1.append(video)
     
     
-    total_videos = len(videos_pic1)
-    index = [i for i in range(total_videos)]
+    total_videos = len(result)
     print(total_videos)
     
     
     width = height=0
     max_len = 8000
-    train_list,val_list,test_list =[],[],[]
-    
-    
+
+      
     print("训练数据目录：",features_dir)
     
-    
-    #sys.exit()
-    val_ratio = 10
-    test_ratio = 20
-    
-    for i in range(total_videos):
-        if i % val_ratio ==0:
-            val_list.append(videos_pic1[i]+".mp4")
-        elif i % test_ratio == 0:
-            test_list.append(videos_pic1[i]+".mp4")
-        else:
-            train_list.append(videos_pic1[i]+".mp4")
-    
-    
-    print("split data:train: {}, test: {}, val: {}".format(len(train_list),len(test_list),len(val_list)))
-#    sys.exit()
-
-
-
-    
- #   print(len(train_index))
-    
-#     train_dataset = VQADataset(features_dir, train_list, max_len)
-#     train_loader = torch.utils.data.DataLoader(dataset=train_dataset, batch_size=args.batch_size, shuffle=True)
-    
-#     print("load train data success!")
-#     for i, (features, length, label) in enumerate(train_loader):
-#         print(features.shape,length.shape)
-#         break
-        
-    
-
-    
-    val_dataset = VQADataset(features_dir, val_list, max_len)
-    val_loader = torch.utils.data.DataLoader(dataset=val_dataset)
-#     for i, (features, length, label) in enumerate(val_loader):
-#         print(features.shape)
-#         break
-    print("load val data success!")
-    
-
-#     test_dataset = VQADataset(features_dir, test_index, max_len, scale=scale)
-#     test_loader = torch.utils.data.DataLoader(dataset=test_dataset)
+    #result =result[0:-100]
+    test_num = len(result)
+    print("test: {},".format(test_num))
+    test_dataset = VQADataset(features_dir, result)
+    test_loader = torch.utils.data.DataLoader(dataset=test_dataset)
     
     model = VSFA().to(device)  #
 
-    if not os.path.exists('models'):
-        os.makedirs('models')
-    trained_model_file = 'models/{}-{}-EXP{}'.format(args.model, args.database, args.exp_id)
-    
 
-
+        
+    pre_model = "./models/model_351.pth"
     criterion = nn.L1Loss()  # L1 loss
-    optimizer = Adam(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
-    scheduler = lr_scheduler.StepLR(optimizer, step_size=args.decay_interval, gamma=args.decay_ratio)
-    best_val_criterion = -1  # SROCC min
-    
-#     for epoch in range(args.epochs):
-#         # Train
-#         model.train()
-#         L = 0
-#         print("start training!")
-#         for i, (features, length, label) in enumerate(train_loader):
-            
-#             #print(length.float())
-#             features = features.to(device).float()
-#             label = label.to(device).float()
-#             optimizer.zero_grad()  #
-#             outputs = model(features, length.float())
-#             #print(outputs.shape,label.shape)
-#             loss = criterion(outputs, label)
-#             loss.backward()
-#             optimizer.step()
-#             L = L + loss.item()
-#         train_loss = L / (i + 1)
-
-#         model.eval()
-#         # Val
-#         y_pred = np.zeros(len(val_list))
-#         y_val = np.zeros(len(val_list))
-#         L = 0
-#         with torch.no_grad():
-#             print("start Val!")
-#             for i, (features, length, label) in enumerate(val_loader):
-#                 y_val[i] = 1 * label.item()  #
-#                 features = features.to(device).float()
-#                 label = label.to(device).float()
-                
-#                 #print("val data:",features.shape,length.shape,label.shape)
-                
-#                 #print(length.float())
-#                 outputs = model(features, length.float())
-#                 #print("outputs",outputs.shape)
-#                 y_pred[i] = 1 * outputs.item()
-                    
-#                 loss = criterion(outputs, label)
-#                 L = L + loss.item()
-#         #print("ypred",y_pred,y_val)
-#         val_loss = L / (i + 1)
-#         val_RMSE = np.sqrt(((y_pred-y_val) ** 2).mean())
-#         print("Val results: val loss={:.4f} RMSE={:.4f}".format(val_loss, val_RMSE))
-
-#         if val_RMSE < best_val_criterion:
-    
-#             torch.save(model.state_dict(), trained_model_file)
-#             best_val_criterion = val_RMSE  
-#     torch.save(model.state_dict(), trained_model_file)
-#     best_val_criterion = val_RMSE  
-
+   # optimizer = Adam(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
+   # scheduler = lr_scheduler.StepLR(optimizer, step_size=args.decay_interval, gamma=args.decay_ratio)
+   # best_val_criterion = -1  # SROCC min
             
     # Test
     if 1:
-        model.load_state_dict(torch.load(trained_model_file))
+        check_point = torch.load(pre_model)
+        new_state_dict={}
+        for k, v in check_point["model"].items():
+            name =k[7:] # remove `module.`，表面从第7个key值字符取到最后一个字符，正好去掉了module.
+            new_state_dict[name] = v #新字典的key值对应的value为一一对应的值。
+        
+        
+        model.load_state_dict(new_state_dict)
+        print("load model {} success".format(pre_model))
+        
         model.eval()
-        print("start test!")
         with torch.no_grad():
-            y_pred = np.zeros(len(val_list))
-            y_test = np.zeros(len(val_list))
+            badcase = {}
+          
+          
+            y_pred = np.zeros(len(result))
+            y_test = np.zeros(len(result))
             L = 0
-            for i, (features, length, label) in enumerate(val_loader):
+            for i, (features, length, label,name) in enumerate(tqdm(test_loader)):
                 y_test[i] = 1 * label.item() 
                 features = features.to(device).float()
                 label = label.to(device).float()
                 outputs = model(features, length.float())
-                y_pred[i] = 1 * outputs.item()
+                if outputs >1.5:
+                    y_pred[i] =2
+                elif outputs <0.5:
+                    y_pred[i] = 0
+                else:
+                    y_pred[i] =1
+                if y_pred[i] != label:
+                    badcase[name[0]] = [float(outputs),int(label)]
+                #y_pred[i] = 1 * outputs.item()
                 loss = criterion(outputs, label)
                 L = L + loss.item()
+                
+                
+          
+          
         test_loss = L / (i + 1)
-       # PLCC = stats.pearsonr(y_pred, y_test)[0]
-        #SROCC = stats.spearmanr(y_pred, y_test)[0]
-        print(y_pred)
-        print(y_test)
+            
         RMSE = np.sqrt(((y_pred-y_test) ** 2).mean())
-        #KROCC = stats.stats.kendalltau(y_pred, y_test)[0]
-        print("Test results: test loss={:.4f}, RMSE={:.4f}".format(test_loss, RMSE))
-      #  np.save(save_result_file, (y_pred, y_test, test_loss, SROCC, KROCC, PLCC, RMSE, test_index))
+        
+        re = y_pred == y_test
+        print(sum(re)/test_num)
+        #print(badcase)
+        print("wrong_num:",len(badcase))
+          
+          
+#         print("Test results: test loss={:.4f}, SROCC={:.4f}, KROCC={:.4f}, PLCC={:.4f}, RMSE={:.4f}"
+#               .format(test_loss, SROCC, KROCC, PLCC, RMSE))
+        
